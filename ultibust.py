@@ -54,7 +54,7 @@ def dirb_url_request(method_and_url):
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
-    except (requests.exceptions.ConnectionsError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.excpetion.RequestException) as e:
+    except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.exceptions.RequestException) as e:
         logging.info("Caught exception for {} {}".format(method, url))
 
     logging.info("{} {} {} {}".format(url, method, status_code, content_length))
