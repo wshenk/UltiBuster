@@ -14,7 +14,7 @@ import threading
 
 output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length']
 output_file_lock = threading.Lock()
-
+completed_count_lock = threading.Lock()
 
 def main():
     global http_headers
@@ -22,6 +22,8 @@ def main():
     global max_http_retries
     global time_to_sleep
     global backoff_interval
+    global methods_and_urls_count
+    global completed_count
 
     args = parse_arguments()
     setup_logging(args.logfile, args.debug)
@@ -48,6 +50,8 @@ def main():
 
 
     methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods)
+    methods_and_urls_count = len(methods_and_urls)
+    completed_count = 0
 
     output_filename = create_output_file(args.output_file)
 
@@ -67,6 +71,8 @@ def dirb_url_request(method_and_url, attempt_number=0):
     global max_http_retries
     global time_to_sleep
     global backoff_interval
+    global methods_and_urls_count
+    global completed_count
 
     attempt_number = attempt_number + 1
 
@@ -88,7 +94,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
             logging.info("Caught exception for {} {}, trying again".format(method, url))
             return dirb_url_request(method_and_url, attempt_number)
         else:
-            logging.info("{} {} hit max retries, {}, stopping".format(url, method, max_http_retries))
+            with completed_count_lock:
+                completed_count = completed_count + 1
+            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
             return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
             
     
@@ -99,10 +107,14 @@ def dirb_url_request(method_and_url, attempt_number=0):
             time.sleep(curr_time_to_sleep)
             return dirb_url_request(method_and_url, attempt_number)
         else:
-            logging.info("{} {} hit max retries, {}, stopping".format(url, method, max_http_retries))
+            with completed_count_lock:
+                completed_count = completed_count + 1
+            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
             return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
 
-    logging.info("{} {} {} {}".format(url, method, status_code, content_length))
+    with completed_count_lock:
+        completed_count = completed_count + 1
+    logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
 
     return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
 
