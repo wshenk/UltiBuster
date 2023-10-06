@@ -4,6 +4,7 @@ import csv
 import os
 import json
 from datetime import datetime
+import time
 import uuid
 import warnings
 from urllib.parse import urlparse
@@ -17,6 +18,10 @@ output_file_lock = threading.Lock()
 
 def main():
     global http_headers
+    global sleep_status_code
+    global max_http_retries
+    global time_to_sleep
+    global backoff_interval
 
     args = parse_arguments()
     setup_logging(args.logfile, args.debug)
@@ -26,12 +31,21 @@ def main():
 
     thread_count = args.threads
 
+    max_http_retries = args.max_http_retries
+
+    sleep_status_code = args.sleep_status_code
+
+    time_to_sleep = args.time_to_sleep
+
+    backoff_interval = args.backoff_interval
+
     http_headers = {}
     if args.header_file:
         http_headers = parse_header_file(args.header_file)
 
     http_methods = args.http_request_methods.split(",")
     [method.strip() for method in http_methods]
+
 
     methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods)
 
@@ -47,8 +61,14 @@ def main():
     logging.info("Completed ultibust, results: {}".format(output_filename))
 
 
-def dirb_url_request(method_and_url):
+def dirb_url_request(method_and_url, attempt_number=0):
     global http_headers
+    global sleep_status_code
+    global max_http_retries
+    global time_to_sleep
+    global backoff_interval
+
+    attempt_number = attempt_number + 1
 
     method = method_and_url["method"]
     url = method_and_url["url"]
@@ -57,13 +77,30 @@ def dirb_url_request(method_and_url):
     path = url_p.path
     status_code = -1
     content_length = -1
+
     try:
         response = requests.request(method, url, allow_redirects=False, headers=http_headers)
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
     except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.exceptions.RequestException) as e:
-        logging.info("Caught exception for {} {}".format(method, url))
+        if attempt_number <= max_http_retries:
+            logging.info("Caught exception for {} {}, trying again".format(method, url))
+            return dirb_url_request(method_and_url, attempt_number)
+        else:
+            logging.info("{} {} hit max retries, {}, stopping".format(url, method, max_http_retries))
+            return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+            
+    
+    if status_code == sleep_status_code:
+        if attempt_number <= max_http_retries:
+            curr_time_to_sleep = time_to_sleep + (attempt_number - 1)*backoff_interval
+            logging.info("{} {} Received sleep status code {}, sleeping for {} seconds".format(url, method, sleep_status_code, curr_time_to_sleep))
+            time.sleep(curr_time_to_sleep)
+            return dirb_url_request(method_and_url, attempt_number)
+        else:
+            logging.info("{} {} hit max retries, {}, stopping".format(url, method, max_http_retries))
+            return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
 
     logging.info("{} {} {} {}".format(url, method, status_code, content_length))
 
@@ -74,16 +111,20 @@ def dirb_url_request(method_and_url):
 def parse_arguments():
     parser =  argparse.ArgumentParser(prog="UltiBust", description="Ultimate directory buster")
 
+    text_date = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     parser.add_argument('hosts_file')
     parser.add_argument('paths_file')
-    parser.add_argument('-t', '--threads', default=10)
-    parser.add_argument('-o', '--output-file', default="ultibust_output_{}.csv".format(datetime.now().strftime("%Y%m%d_%H%M%S")))
+    parser.add_argument('-t', '--threads', type=int, default=10)
+    parser.add_argument('-o', '--output-file', default="ultibust_output_{}.csv".format(text_date))
     parser.add_argument('-H', '--header-file')
     parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
-    parser.add_argument('-s', '--sleep-status-code')
+    parser.add_argument('-s', '--sleep-status-code', type=int, default=529)
     parser.add_argument('-S', '--sleep-response-content')
-    parser.add_argument('-T', '--time-to-sleep')
-    parser.add_argument('-l', '--logfile')
+    parser.add_argument('-T', '--time-to-sleep', type=int, default=30)
+    parser.add_argument('-b', '--backoff-interval', type=int, default=30)
+    parser.add_argument('-M', '--max-http-retries', type=int, default=3)
+    parser.add_argument('-l', '--logfile', default="ultibust_logfile_{}.log".format(text_date))
     parser.add_argument('-d', '--debug', action='store_true')
 
     args = parser.parse_args()
@@ -136,16 +177,12 @@ def create_output_file(output_file_arg):
 
 def setup_logging(logfile_arg, debug_arg):
     log_format="%(asctime)s [%(levelname)s] %(message)s"
-    if logfile_arg and debug_arg:
+    if debug_arg:
         logging.basicConfig(filename=logfile_arg, level=logging.DEBUG, format=log_format)
         logging.getLogger().addHandler(logging.StreamHandler())
-    elif logfile_arg and not debug_arg:
+    else:
         logging.basicConfig(filename=logfile_arg, level=logging.INFO, format=log_format)
         logging.getLogger().addHandler(logging.StreamHandler())
-    elif not logfile_arg and debug_arg:
-        logging.basicConfig(level=logging.DEBUG, format=log_format)
-    else:
-        logging.basicConfig(level=logging.INFO, format=log_format)
 
 
 if __name__ == "__main__":
