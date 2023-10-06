@@ -23,15 +23,23 @@ def main():
 
     hosts = parse_newline_delimited_file(args.hosts_file)
     paths = parse_newline_delimited_file(args.paths_file)
-    http_headers = parse_header_file(args.header_file)
-    http_methods = ['OPTIONS', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'CONNECT', 'TRACE']
+
+    thread_count = args.threads
+
+    http_headers = {}
+    if args.header_file:
+        http_headers = parse_header_file(args.header_file)
+
+    http_methods = args.http_request_methods.split(",")
+    [method.strip() for method in http_methods]
+
     methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods)
 
     output_filename = create_output_file(args.output_file)
 
     with open(output_filename, 'a') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=output_csv_fields)
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
             for result in executor.map(dirb_url_request, methods_and_urls):
                 with output_file_lock:
                     writer.writerow(result)
@@ -68,11 +76,10 @@ def parse_arguments():
 
     parser.add_argument('hosts_file')
     parser.add_argument('paths_file')
-    parser.add_argument('-t', '--threads')
-    parser.add_argument('-M', '--max-hosts')
-    parser.add_argument('-o', '--output-file')
+    parser.add_argument('-t', '--threads', default=10)
+    parser.add_argument('-o', '--output-file', default="ultibust_output_{}.csv".format(datetime.now().strftime("%Y%m%d_%H%M%S")))
     parser.add_argument('-H', '--header-file')
-    parser.add_argument('-m', '--http-request-methods')
+    parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
     parser.add_argument('-s', '--sleep-status-code')
     parser.add_argument('-S', '--sleep-response-content')
     parser.add_argument('-T', '--time-to-sleep')
@@ -119,11 +126,7 @@ def parse_header_file(filename):
 
 
 def create_output_file(output_file_arg):
-    filename = ""
-    if output_file_arg:
-        filename = output_file_arg
-    else:
-        filename =  "ultibust_results_{}.csv".format(datetime.today().strftime("%Y%m%d_%H%M%S"))
+    filename = output_file_arg
     with open(filename, 'w') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=output_csv_fields)
         writer.writeheader()
