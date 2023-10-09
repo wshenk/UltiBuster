@@ -48,8 +48,11 @@ def main():
     http_methods = args.http_request_methods.split(",")
     [method.strip() for method in http_methods]
 
+    params = {}
+    if args.params_file:
+        params = parse_params_file(args.params_file, delimeter=args.params_file_delimeter)
 
-    methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods)
+    methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods, params)
     methods_and_urls_count = len(methods_and_urls)
     completed_count = 0
 
@@ -128,8 +131,10 @@ def parse_arguments():
     parser.add_argument('hosts_file')
     parser.add_argument('paths_file')
     parser.add_argument('-t', '--threads', type=int, default=10)
-    parser.add_argument('-o', '--output-file', default="ultibust_output_{}.csv".format(text_date))
+    parser.add_argument('-O', '--output-file', default="ultibust_output_{}.csv".format(text_date))
     parser.add_argument('-H', '--header-file')
+    parser.add_argument('-P', '--params-file')
+    parser.add_argument('-D', '--params-file-delimeter', default=':')
     parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
     parser.add_argument('-s', '--sleep-status-code', type=int, default=529)
     parser.add_argument('-S', '--sleep-response-content')
@@ -144,7 +149,13 @@ def parse_arguments():
     return args
 
 
-def combine_hosts_paths_and_methods(hosts, paths, http_methods):
+def combine_hosts_paths_and_methods(hosts, paths, http_methods, params):
+    for path_index, path in enumerate(paths):
+        temp_path = path
+        for param_key, param_value in params.items():
+            temp_path = temp_path.replace("{{{}}}".format(param_key), param_value)
+        paths[path_index] = temp_path
+
     methods_and_urls = []
     for host in hosts:
         host = host.rstrip("/")
@@ -176,6 +187,20 @@ def parse_header_file(filename):
                 header_dict[header_name] = header_value
     return header_dict
 
+
+def parse_params_file(filename, delimeter=":"):
+    param_dict = {}
+    if filename:
+        with open(filename, 'r') as params_file:
+            params = params_file.readlines()
+        params = [param.strip() for param in params]
+        for param in params:
+            if ":" in param:
+                plist = param.split(delimeter)
+                param_name = plist[0].strip()
+                param_value = plist[1].strip()
+                param_dict[param_name] = param_value
+    return param_dict
 
 
 def create_output_file(output_file_arg):
