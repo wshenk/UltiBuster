@@ -69,7 +69,7 @@ def main():
         http_headers = parse_header_file(args.header_file)
 
     response_headers_to_record = []
-    if args.response_headers != '':
+    if args.response_headers:
         response_headers_to_record = args.response_headers.split(":")
         response_headers_to_record = [response_header.strip().lower() for response_header in response_headers_to_record]
     for header in response_headers_to_record:
@@ -183,7 +183,7 @@ def parse_arguments():
     parser.add_argument('-H', '--header-file')
     parser.add_argument('-P', '--params-file')
     parser.add_argument('-D', '--params-file-delimeter', default=':')
-    parser.add_argument('-r', '--response-headers', default='')
+    parser.add_argument('-r', '--response-headers')
     parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
     parser.add_argument('-5', '--md5', action='store_true', default=False)
     parser.add_argument('-s', '--sleep-status-code', type=int, default=529)
