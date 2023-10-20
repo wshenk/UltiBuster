@@ -9,6 +9,7 @@ import uuid
 import warnings
 import hashlib
 import os
+import copy
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -62,6 +63,16 @@ def main():
 
     should_calculate_md5_content_hash = args.md5
 
+    fuzz_data = None
+    if args.fuzz_file:
+        fuzz_data = parse_newline_delimited_file(args.fuzz_file)
+
+    http_headers_to_fuzz = args.headers_to_fuzz
+
+    if fuzz_data and http_headers_to_fuzz:
+        output_csv_fields.append('fuzzed_http_header')
+        output_csv_fields.append('fuzz_value')
+
     http_headers = {}
     if 'http_headers' in config_data:
         http_headers = config_data['http_headers']
@@ -82,7 +93,7 @@ def main():
     if args.params_file:
         params = parse_params_file(args.params_file, delimeter=args.params_file_delimeter)
 
-    methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods, params)
+    methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_data)
     methods_and_urls_count = len(methods_and_urls)
     completed_count = 0
 
@@ -113,6 +124,16 @@ def dirb_url_request(method_and_url, attempt_number=0):
 
     method = method_and_url["method"]
     url = method_and_url["url"]
+
+    local_http_headers = http_headers
+    http_header_to_fuzz = None
+    fuzz_value = None
+    if "http_header_to_fuzz" in method_and_url and "fuzz_value" in method_and_url:
+        local_http_headers = copy.deepcopy(http_headers)
+        http_header_to_fuzz = method_and_url["http_header_to_fuzz"]
+        fuzz_value = method_and_url["fuzz_value"]
+        local_http_headers[http_header_to_fuzz] = fuzz_value
+
     url_p = urlparse(url)
     host = url_p.hostname
     path = url_p.path
@@ -125,7 +146,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
         response_headers[header] = None
 
     try:
-        response = requests.request(method, url, allow_redirects=False, headers=http_headers)
+        response = requests.request(method, url, allow_redirects=False, headers=local_http_headers)
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
@@ -146,6 +167,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
             ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
+            if fuzz_value and http_header_to_fuzz:
+                ret_dict["fuzzed_http_header"] = http_header_to_fuzz
+                ret_dict["fuzz_value"] = fuzz_value
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
             
     
@@ -161,6 +185,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
             ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
+            if fuzz_value and http_header_to_fuzz:
+                ret_dict["fuzzed_http_header"] = http_header_to_fuzz
+                ret_dict["fuzz_value"] = fuzz_value
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
     with completed_count_lock:
@@ -168,6 +195,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
     logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
 
     ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
+    if fuzz_value and http_header_to_fuzz:
+        ret_dict["fuzzed_http_header"] = http_header_to_fuzz
+        ret_dict["fuzz_value"] = fuzz_value
     return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
 
@@ -181,6 +211,8 @@ def parse_arguments():
     parser.add_argument('-t', '--threads', type=int, default=10)
     parser.add_argument('-O', '--output-file', default="ultibust_output_{}.csv".format(text_date))
     parser.add_argument('-H', '--header-file')
+    parser.add_argument('-f', '--headers-to-fuzz', nargs='+', default=[])
+    parser.add_argument('-z', '--fuzz-file')
     parser.add_argument('-P', '--params-file')
     parser.add_argument('-D', '--params-file-delimeter', default=':')
     parser.add_argument('-r', '--response-headers')
@@ -199,7 +231,7 @@ def parse_arguments():
     return args
 
 
-def combine_hosts_paths_and_methods(hosts, paths, http_methods, params):
+def combine_hosts_paths_and_methods(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_list):
     for path_index, path in enumerate(paths):
         temp_path = path
         for param_key, param_value in params.items():
@@ -212,7 +244,12 @@ def combine_hosts_paths_and_methods(hosts, paths, http_methods, params):
         for path in paths:
             path = path.strip("/")
             for method in http_methods:
-                methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path)})
+                if http_headers_to_fuzz and fuzz_list:
+                    for header in http_headers_to_fuzz:
+                        for fuzz_value in fuzz_list:
+                            methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path), "http_header_to_fuzz":header, "fuzz_value":fuzz_value})
+                else:
+                    methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path)})
     return methods_and_urls
 
 
