@@ -49,7 +49,12 @@ def main():
 
 
     hosts = parse_newline_delimited_file(args.hosts_file)
+    host_set = {host for host in hosts}
+    hosts = list(host_set)
+
     paths = parse_newline_delimited_file(args.paths_file)
+    path_set = {path for path in paths}
+    paths = list(path_set)
 
     thread_count = args.threads
 
