@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import threading
 
-output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length']
+output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length', 'total_seconds']
 output_file_lock = threading.Lock()
 completed_count_lock = threading.Lock()
 
@@ -93,6 +93,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
     path = url_p.path
     status_code = -1
     content_length = -1
+    total_seconds = -1
     response_headers = {}
     for header in response_headers_to_record:
         response_headers[header] = None
@@ -102,6 +103,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
+        total_seconds = response.elapsed.total_seconds()
         for header in response.headers.keys():
             if header.lower() in response_headers.keys():
                 response_headers[header.lower()] = response.headers[header]
@@ -114,7 +116,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
-            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
             
     
@@ -129,14 +131,14 @@ def dirb_url_request(method_and_url, attempt_number=0):
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
-            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
     with completed_count_lock:
         completed_count = completed_count + 1
     logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
 
-    ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+    ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
     return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
 
