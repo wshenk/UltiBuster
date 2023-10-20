@@ -24,6 +24,7 @@ def main():
     global backoff_interval
     global methods_and_urls_count
     global completed_count
+    global response_headers_to_record
 
     args = parse_arguments()
     setup_logging(args.logfile, args.debug)
@@ -45,8 +46,13 @@ def main():
     if args.header_file:
         http_headers = parse_header_file(args.header_file)
 
+    response_headers_to_record = args.response_headers.split(":")
+    response_headers_to_record = [response_header.strip().lower() for response_header in response_headers_to_record]
+    for header in response_headers_to_record:
+        output_csv_fields.append(f"rh_{header}")
+
     http_methods = args.http_request_methods.split(",")
-    [method.strip() for method in http_methods]
+    http_methods = [method.strip() for method in http_methods]
 
     params = {}
     if args.params_file:
@@ -76,6 +82,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
     global backoff_interval
     global methods_and_urls_count
     global completed_count
+    global response_headers_to_record
 
     attempt_number = attempt_number + 1
 
@@ -86,12 +93,18 @@ def dirb_url_request(method_and_url, attempt_number=0):
     path = url_p.path
     status_code = -1
     content_length = -1
+    response_headers = {}
+    for header in response_headers_to_record:
+        response_headers[header] = None
 
     try:
         response = requests.request(method, url, allow_redirects=False, headers=http_headers)
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
+        for header in response.headers.keys():
+            if header.lower() in response_headers.keys():
+                response_headers[header.lower()] = response.headers[header]
     except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.exceptions.RequestException) as e:
         if attempt_number <= max_http_retries:
             logging.info("Caught exception for {} {}, trying again".format(method, url))
@@ -100,7 +113,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
             with completed_count_lock:
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
-            return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+            return add_response_headers_to_ret_dict(ret_dict, response_headers)
             
     
     if status_code == sleep_status_code:
@@ -113,14 +128,16 @@ def dirb_url_request(method_and_url, attempt_number=0):
             with completed_count_lock:
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
-            return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+            return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
     with completed_count_lock:
         completed_count = completed_count + 1
     logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
 
-    return {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
-
+    ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length}
+    return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
 
 def parse_arguments():
@@ -135,6 +152,7 @@ def parse_arguments():
     parser.add_argument('-H', '--header-file')
     parser.add_argument('-P', '--params-file')
     parser.add_argument('-D', '--params-file-delimeter', default=':')
+    parser.add_argument('-r', '--response-headers', default='')
     parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
     parser.add_argument('-s', '--sleep-status-code', type=int, default=529)
     parser.add_argument('-S', '--sleep-response-content')
@@ -165,6 +183,11 @@ def combine_hosts_paths_and_methods(hosts, paths, http_methods, params):
                 methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path)})
     return methods_and_urls
 
+
+def add_response_headers_to_ret_dict(ret_dict, response_headers):
+    for header in response_headers.keys():
+        ret_dict[f"rh_{header}"] = response_headers[header]
+    return ret_dict
 
 def parse_newline_delimited_file(filename):
     items = []
