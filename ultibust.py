@@ -8,6 +8,7 @@ import time
 import uuid
 import warnings
 import hashlib
+import os
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -32,6 +33,20 @@ def main():
 
     output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length', 'total_seconds', 'md5_hash']
 
+    config_file_path = os.path.join(os.path.expanduser("~"), ".ultibuster/config.json")
+    config_data = {}
+    if os.path.isfile(config_file_path):
+        try:
+            with open(config_file_path, "r") as config_file:
+                config_data = json.load(config_file)
+                logging.info("[+] Parsed config file at {}".format(os.path.normpath(config_file_path)))
+                logging.info("[+] Config data: {}".format(config_data))
+        except:
+            logging.info("[-] Error parsing config file at {}".format(os.path.normpath(config_file_path)))
+    else:
+        logging.info("[.] No config file found at {}".format(os.path.normpath(config_file_path)))
+
+
     hosts = parse_newline_delimited_file(args.hosts_file)
     paths = parse_newline_delimited_file(args.paths_file)
 
@@ -48,6 +63,8 @@ def main():
     should_calculate_md5_content_hash = args.md5
 
     http_headers = {}
+    if 'http_headers' in config_data:
+        http_headers = config_data['http_headers']
     if args.header_file:
         http_headers = parse_header_file(args.header_file)
 
