@@ -68,8 +68,10 @@ def main():
     if args.header_file:
         http_headers = parse_header_file(args.header_file)
 
-    response_headers_to_record = args.response_headers.split(":")
-    response_headers_to_record = [response_header.strip().lower() for response_header in response_headers_to_record]
+    response_headers_to_record = []
+    if args.response_headers != '':
+        response_headers_to_record = args.response_headers.split(":")
+        response_headers_to_record = [response_header.strip().lower() for response_header in response_headers_to_record]
     for header in response_headers_to_record:
         output_csv_fields.append(f"rh_{header}")
 
