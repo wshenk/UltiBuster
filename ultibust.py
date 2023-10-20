@@ -7,12 +7,12 @@ from datetime import datetime
 import time
 import uuid
 import warnings
+import hashlib
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import threading
 
-output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length', 'total_seconds']
 output_file_lock = threading.Lock()
 completed_count_lock = threading.Lock()
 
@@ -25,9 +25,12 @@ def main():
     global methods_and_urls_count
     global completed_count
     global response_headers_to_record
+    global should_calculate_md5_content_hash
 
     args = parse_arguments()
     setup_logging(args.logfile, args.debug)
+
+    output_csv_fields = ['host', 'path', 'method', 'resp_status_code', 'resp_content_length', 'total_seconds', 'md5_hash']
 
     hosts = parse_newline_delimited_file(args.hosts_file)
     paths = parse_newline_delimited_file(args.paths_file)
@@ -41,6 +44,8 @@ def main():
     time_to_sleep = args.time_to_sleep
 
     backoff_interval = args.backoff_interval
+
+    should_calculate_md5_content_hash = args.md5
 
     http_headers = {}
     if args.header_file:
@@ -62,7 +67,7 @@ def main():
     methods_and_urls_count = len(methods_and_urls)
     completed_count = 0
 
-    output_filename = create_output_file(args.output_file)
+    output_filename = create_output_file(args.output_file, output_csv_fields)
 
     with open(output_filename, 'a') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=output_csv_fields)
@@ -83,6 +88,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
     global methods_and_urls_count
     global completed_count
     global response_headers_to_record
+    global should_calculate_md5_content_hash
 
     attempt_number = attempt_number + 1
 
@@ -95,6 +101,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
     content_length = -1
     total_seconds = -1
     response_headers = {}
+    md5_hash = None
     for header in response_headers_to_record:
         response_headers[header] = None
 
@@ -107,6 +114,9 @@ def dirb_url_request(method_and_url, attempt_number=0):
         for header in response.headers.keys():
             if header.lower() in response_headers.keys():
                 response_headers[header.lower()] = response.headers[header]
+        if should_calculate_md5_content_hash and content_length > 0:
+            md5_hash = hashlib.md5(response.content).hexdigest()
+
     except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.exceptions.RequestException) as e:
         if attempt_number <= max_http_retries:
             logging.info("Caught exception for {} {}, trying again".format(method, url))
@@ -116,7 +126,7 @@ def dirb_url_request(method_and_url, attempt_number=0):
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
-            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
             
     
@@ -131,14 +141,14 @@ def dirb_url_request(method_and_url, attempt_number=0):
                 completed_count = completed_count + 1
             logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
 
-            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
+            ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
     with completed_count_lock:
         completed_count = completed_count + 1
     logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
 
-    ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds}
+    ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
     return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
 
@@ -156,6 +166,7 @@ def parse_arguments():
     parser.add_argument('-D', '--params-file-delimeter', default=':')
     parser.add_argument('-r', '--response-headers', default='')
     parser.add_argument('-m', '--http-request-methods', default='OPTIONS,GET,POST,PUT,PATCH,DELETE,HEAD,CONNECT,TRACE')
+    parser.add_argument('-5', '--md5', action='store_true', default=False)
     parser.add_argument('-s', '--sleep-status-code', type=int, default=529)
     parser.add_argument('-S', '--sleep-response-content')
     parser.add_argument('-T', '--time-to-sleep', type=int, default=30)
@@ -228,7 +239,7 @@ def parse_params_file(filename, delimeter=":"):
     return param_dict
 
 
-def create_output_file(output_file_arg):
+def create_output_file(output_file_arg, output_csv_fields):
     filename = output_file_arg
     with open(filename, 'w') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=output_csv_fields)
