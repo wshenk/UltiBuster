@@ -24,7 +24,7 @@ def main():
     global max_http_retries
     global time_to_sleep
     global backoff_interval
-    global methods_and_urls_count
+    global prepared_requests_count
     global completed_count
     global response_headers_to_record
     global should_calculate_md5_content_hash
@@ -74,10 +74,6 @@ def main():
 
     http_headers_to_fuzz = args.headers_to_fuzz
 
-    if fuzz_data and http_headers_to_fuzz:
-        output_csv_fields.append('fuzzed_http_header')
-        output_csv_fields.append('fuzz_value')
-
     http_headers = {}
     if 'http_headers' in config_data:
         http_headers = config_data['http_headers']
@@ -98,8 +94,8 @@ def main():
     if args.params_file:
         params = parse_params_file(args.params_file, delimeter=args.params_file_delimeter)
 
-    methods_and_urls = combine_hosts_paths_and_methods(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_data)
-    methods_and_urls_count = len(methods_and_urls)
+    prepared_requests = create_prepared_requests(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_data, headers=http_headers)
+    prepared_requests_count = len(prepared_requests)
     completed_count = 0
 
     output_filename = create_output_file(args.output_file, output_csv_fields)
@@ -107,37 +103,27 @@ def main():
     with open(output_filename, 'a') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=output_csv_fields)
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            for result in executor.map(dirb_url_request, methods_and_urls):
+            for result in executor.map(dirb_url_request, prepared_requests):
                 with output_file_lock:
                     writer.writerow(result)
 
     logging.info("Completed ultibust, results: {}".format(output_filename))
 
 
-def dirb_url_request(method_and_url, attempt_number=0):
-    global http_headers
+def dirb_url_request(prepared_request, attempt_number=0):
     global sleep_status_code
     global max_http_retries
     global time_to_sleep
     global backoff_interval
-    global methods_and_urls_count
+    global prepared_requests_count
     global completed_count
     global response_headers_to_record
     global should_calculate_md5_content_hash
 
     attempt_number = attempt_number + 1
 
-    method = method_and_url["method"]
-    url = method_and_url["url"]
-
-    local_http_headers = http_headers
-    http_header_to_fuzz = None
-    fuzz_value = None
-    if "http_header_to_fuzz" in method_and_url and "fuzz_value" in method_and_url:
-        local_http_headers = copy.deepcopy(http_headers)
-        http_header_to_fuzz = method_and_url["http_header_to_fuzz"]
-        fuzz_value = method_and_url["fuzz_value"]
-        local_http_headers[http_header_to_fuzz] = fuzz_value
+    method = prepared_request.method
+    url = prepared_request.url
 
     url_p = urlparse(url)
     host = url_p.hostname
@@ -147,11 +133,14 @@ def dirb_url_request(method_and_url, attempt_number=0):
     total_seconds = -1
     response_headers = {}
     md5_hash = None
+
+    session = requests.Session()
+
     for header in response_headers_to_record:
         response_headers[header] = None
 
     try:
-        response = requests.request(method, url, allow_redirects=False, headers=local_http_headers)
+        response = session.send(prepared_request, allow_redirects=False)
         logging.debug(response.request.headers)
         status_code = response.status_code
         content_length = len(response.content)
@@ -165,16 +154,13 @@ def dirb_url_request(method_and_url, attempt_number=0):
     except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout, requests.exceptions.TooManyRedirects, requests.exceptions.RequestException) as e:
         if attempt_number <= max_http_retries:
             logging.info("Caught exception for {} {}, trying again".format(method, url))
-            return dirb_url_request(method_and_url, attempt_number)
+            return dirb_url_request(prepared_request, attempt_number)
         else:
             with completed_count_lock:
                 completed_count = completed_count + 1
-            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
+            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, prepared_requests_count, url, method, max_http_retries))
 
             ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
-            if fuzz_value and http_header_to_fuzz:
-                ret_dict["fuzzed_http_header"] = http_header_to_fuzz
-                ret_dict["fuzz_value"] = fuzz_value
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
             
     
@@ -183,26 +169,20 @@ def dirb_url_request(method_and_url, attempt_number=0):
             curr_time_to_sleep = time_to_sleep + (attempt_number - 1)*backoff_interval
             logging.info("{} {} Received sleep status code {}, sleeping for {} seconds".format(url, method, sleep_status_code, curr_time_to_sleep))
             time.sleep(curr_time_to_sleep)
-            return dirb_url_request(method_and_url, attempt_number)
+            return dirb_url_request(prepared_request, attempt_number)
         else:
             with completed_count_lock:
                 completed_count = completed_count + 1
-            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, methods_and_urls_count, url, method, max_http_retries))
+            logging.info("[{}/{}] {} {} hit max retries, {}, stopping".format(completed_count, prepared_requests_count, url, method, max_http_retries))
 
             ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
-            if fuzz_value and http_header_to_fuzz:
-                ret_dict["fuzzed_http_header"] = http_header_to_fuzz
-                ret_dict["fuzz_value"] = fuzz_value
             return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
     with completed_count_lock:
         completed_count = completed_count + 1
-    logging.info("[{}/{}] {} {} {} {}".format(completed_count, methods_and_urls_count, url, method, status_code, content_length))
+    logging.info("[{}/{}] {} {} {} {}".format(completed_count, prepared_requests_count, url, method, status_code, content_length))
 
     ret_dict = {"host": host, "path":path, "method":method, "resp_status_code":status_code, "resp_content_length":content_length, "total_seconds":total_seconds, "md5_hash":md5_hash}
-    if fuzz_value and http_header_to_fuzz:
-        ret_dict["fuzzed_http_header"] = http_header_to_fuzz
-        ret_dict["fuzz_value"] = fuzz_value
     return add_response_headers_to_ret_dict(ret_dict, response_headers)
 
 
@@ -236,14 +216,20 @@ def parse_arguments():
     return args
 
 
-def combine_hosts_paths_and_methods(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_list):
+def create_prepared_request(http_method, url, headers={}):
+    request = requests.Request(http_method, url, headers=headers)
+    prepped = request.prepare()
+    return prepped
+
+
+def create_prepared_requests(hosts, paths, http_methods, params, http_headers_to_fuzz, fuzz_list, headers={}):
     for path_index, path in enumerate(paths):
         temp_path = path
         for param_key, param_value in params.items():
             temp_path = temp_path.replace("{{{}}}".format(param_key), param_value)
         paths[path_index] = temp_path
 
-    methods_and_urls = []
+    prepared_requests = []
     for host in hosts:
         host = host.rstrip("/")
         for path in paths:
@@ -252,10 +238,13 @@ def combine_hosts_paths_and_methods(hosts, paths, http_methods, params, http_hea
                 if http_headers_to_fuzz and fuzz_list:
                     for header in http_headers_to_fuzz:
                         for fuzz_value in fuzz_list:
-                            methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path), "http_header_to_fuzz":header, "fuzz_value":fuzz_value})
+                            headers[header] = fuzz_value
+                            prepped = create_prepared_request(method,"{}/{}".format(host, path), headers=headers)
+                            prepared_requests.append(prepped)
                 else:
-                    methods_and_urls.append({"method":method, "url":"{}/{}".format(host, path)})
-    return methods_and_urls
+                    prepped = create_prepared_request(method,"{}/{}".format(host, path), headers=headers)
+                    prepared_requests.append(prepped)
+    return prepared_requests
 
 
 def add_response_headers_to_ret_dict(ret_dict, response_headers):
